@@ -2,14 +2,15 @@
 const DB_NAME = 'session-browser';
 // roots: picked folders · summaries: per-file parse cache · snapshot: last sync's session list
 // messages: recently opened conversations, so they open before the next sync
-const STORES = ['roots', 'summaries', 'snapshot', 'messages'] as const;
+// devices: totals imported from this person's other computers
+const STORES = ['roots', 'summaries', 'snapshot', 'messages', 'devices'] as const;
 type Store = (typeof STORES)[number];
 
 let dbp: Promise<IDBDatabase> | null = null;
 
 function open(): Promise<IDBDatabase> {
 	return (dbp ??= new Promise((resolve, reject) => {
-		const r = indexedDB.open(DB_NAME, 2);
+		const r = indexedDB.open(DB_NAME, 3);
 		r.onupgradeneeded = () => STORES.forEach((s) => r.result.objectStoreNames.contains(s) || r.result.createObjectStore(s));
 		r.onsuccess = () => resolve(r.result);
 		r.onerror = () => reject(r.error);

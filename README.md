@@ -49,6 +49,7 @@ Limits:
   - Each entry carries `external_id` `session-browser:<session id>`, so sending a session again updates its entry instead of adding a duplicate. Subagent sessions are left out of list sends, since they're part of their parent's work.
   - Sent sessions are marked in the list and in the conversation view ("In Worklog"), and turn amber when the session has continued since it was sent. These marks are kept in this browser only.
   - It calls Worklog's MCP endpoint (`https://worklog.pro.et/api/mcp`, `log_work` tool) from the browser, with the key in an `Authorization` header. The key is kept in memory, or in this browser's localStorage if you tick "Remember on this device".
+- **Several computers**: under Sources, **Save this computer's file** downloads its totals (per-session tokens, models, dates, tool and time stats, titles and folders; no prompts, conversations or file paths). **Import another computer** on any of your computers adds that file, and the overview, Tools and Time pages, the share image and the list then show all of them combined. Imported sessions carry the computer's name and can't be opened, since the conversation stays where it was recorded. A session found on two computers is counted once, a newer file from the same computer replaces the older one, and imported files stay in this browser (`src/lib/devices.ts`).
 - Picked folders are remembered in the browser, and the last sync is shown right away on return. **Sync** reads them again (Chromium may ask for one click to re-allow access). Other browsers can drag folders in.
 - With **Remove sensitive info** on, a session shows how many items were hidden and a list of them, grouped by type, with a jump to where each appears.
 - Parsed summaries are cached in IndexedDB, so unchanged files aren't re-read.
@@ -59,6 +60,7 @@ Limits:
 - `src/lib/worker/`: Web Worker pool that receives `File`s and returns summaries or messages
 - `src/lib/sources.ts`: walks picked or dropped folders, visiting only the subfolders that can hold sessions
 - `src/lib/store.svelte.ts`: app state, cache, remembered folders
+- `src/lib/devices.ts`, `src/lib/components/Devices.svelte`: device files, for combining a person's computers
 - `src/lib/redact.ts`, `src/lib/export.ts`, `src/lib/toolinfo.ts`: redaction, export formats, tool-call presentation
 - `src/lib/stats.ts`: per-session tool and time statistics, worked out in the parse worker and cached with each summary
 - `src/lib/sharecard.ts`: draws the shareable PNG on a canvas

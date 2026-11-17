@@ -9,6 +9,7 @@
 	import ToolsPage from '#lib/components/ToolsPage.svelte';
 	import SessionView from '#lib/components/SessionView.svelte';
 	import SettingsDialog from '#lib/components/SettingsDialog.svelte';
+	import Devices from '#lib/components/Devices.svelte';
 	import SourcesDialog from '#lib/components/SourcesDialog.svelte';
 	import { loadLivePrices } from '#lib/pricing.svelte.ts';
 	import { ago, folder, fmt, sessionTotal } from '#lib/format.ts';
@@ -169,6 +170,7 @@
 			</div>
 		{/if}
 		<Connect />
+		<Devices bare />
 	</main>
 {:else}
 	<div class="app" data-pane={mobilePane}>
@@ -259,6 +261,7 @@
 									><Icon name={ws.stale ? 'refresh' : 'send'} size={11} /></span
 								>
 							{/if}
+							{#if s.device}<span class="dev" title="Imported from {s.device}">{s.device}</span>{/if}
 							<span class="r">{ago(s.end)}</span>
 						</span>
 						{#if s._snip}<span class="snip">{show(s._snip)}</span>{/if}
@@ -612,6 +615,18 @@
 	}
 	.wl.stale {
 		color: var(--warn);
+	}
+	.dev {
+		flex: 0 1 auto;
+		min-width: 0;
+		max-width: 90px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		padding: 0 5px;
+		border: 1px solid var(--line);
+		border-radius: 999px;
+		font-size: 10.5px;
 	}
 	.r {
 		margin-left: auto;

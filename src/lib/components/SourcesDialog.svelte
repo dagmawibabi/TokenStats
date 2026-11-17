@@ -2,6 +2,7 @@
 	import { ago } from '#lib/format.ts';
 	import { app } from '#lib/store.svelte.ts';
 	import Connect from './Connect.svelte';
+	import Devices from './Devices.svelte';
 	import Icon from './Icon.svelte';
 
 	let { onclose }: { onclose: () => void } = $props();
@@ -51,9 +52,11 @@
 			</div>
 		{/if}
 
+		<Devices />
+
 		<footer>
 			{#if confirmForget}
-				<span>Forget every folder and all cached data in this browser?</span>
+				<span>Forget every folder, imported computer and all cached data in this browser?</span>
 				<span class="fa">
 					<button class="btn ghost" onclick={() => (confirmForget = false)}>Cancel</button>
 					<button class="btn danger" onclick={() => (app.forgetEverything(), dialog.close())}>Forget all</button>
@@ -72,6 +75,7 @@
 		background: transparent;
 		color: var(--ink);
 		max-width: min(560px, calc(100vw - 32px));
+		max-height: calc(100dvh - 32px);
 		width: 100%;
 	}
 	dialog::backdrop {

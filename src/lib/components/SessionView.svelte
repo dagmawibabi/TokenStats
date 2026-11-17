@@ -19,10 +19,14 @@
 	const s = $derived(raw && prefs.redact ? redactSession(raw, findUsernames([raw.cwd, raw.path, ...(msgs ?? []).map((m) => m.text)])) : raw);
 	let error = $state<string | null>(null);
 
+	/** imported from another computer: totals only, no conversation to read */
+	const elsewhere = $derived(raw?.device ?? null);
+
 	$effect(() => {
 		const current = id;
 		msgs = null;
 		error = null;
+		if (app.session(current)?.device) return;
 		app
 			.messages(current)
 			.then((m) => current === id && (msgs = m))
@@ -105,7 +109,7 @@
 					Remove sensitive info
 				</label>
 				<button class="btn" onclick={onworklog} title="Add this session to your Worklog timeline"><Icon name="send" size={14} /> Worklog</button>
-				<button class="btn" onclick={onexport}><Icon name="download" size={14} /> Export</button>
+				<button class="btn" onclick={onexport} disabled={!!elsewhere} title={elsewhere ? 'The conversation is on the computer it was recorded on' : undefined}><Icon name="download" size={14} /> Export</button>
 			</div>
 		</div>
 		<div class="meta">
@@ -115,6 +119,7 @@
 			{#if s.client}<span>{s.client}</span>{/if}
 			{#if s.branch}<span class="mono">{s.branch}</span>{/if}
 			{#if s.archived}<span class="pill">archived</span>{/if}
+			{#if elsewhere}<span class="pill" title="Imported from this computer's device file">{elsewhere}</span>{/if}
 			{#if sentState(s)}
 				{@const ws = sentState(s)!}
 				<button
@@ -180,7 +185,9 @@
 		{/if}
 	</header>
 
-	{#if error}
+	{#if elsewhere}
+		<div class="empty">This session was imported from {elsewhere}. Device files hold totals only, so the conversation can be read on that computer.</div>
+	{:else if error}
 		<div class="empty">Couldn't read this session: {error}</div>
 	{:else if !msgs}
 		<div class="empty">Reading conversation…</div>

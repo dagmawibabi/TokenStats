@@ -22,6 +22,8 @@ export interface HistoryEntry {
 	approx?: boolean;
 	cwd?: string | null;
 	title?: string;
+	/** name of the computer it was imported from (a device file) */
+	device?: string;
 }
 
 export interface CoverageNote {

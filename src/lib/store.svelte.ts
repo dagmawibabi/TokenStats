@@ -1,6 +1,7 @@
 import type { AgIndexEntry } from './parsers/antigravity';
 import { codexThreadNames, type CodexThread } from './parsers/codex';
 import { claudeCoverage, claudeRetention, codexCoverage, dedupeCalls, otherNotes, parseClaudeStatsCache, subtractTokens, type Coverage, type CoverageNote, type HistoryEntry } from './history';
+import { buildDeviceFile, combine, guessDeviceName, parseDeviceFile, type Device, type DeviceFile } from './devices';
 import { idb } from './idb';
 import { claudeAccount, collect, ensurePermission, type Entry, type Root } from './sources';
 
@@ -20,6 +21,33 @@ export class NeedsSync extends Error {
 		super('Sync to read this conversation');
 		this.name = 'NeedsSync';
 	}
+}
+
+/** The session came from another computer's device file, which holds totals but no conversation. */
+export class OtherDevice extends Error {
+	constructor(name: string) {
+		super(`This session was imported from ${name}. Device files hold totals only, so the conversation can be read on that computer.`);
+		this.name = 'OtherDevice';
+	}
+}
+
+const DEVICE_KEY = 'sb-device';
+/** This computer's identity: made once and kept in this browser. */
+function loadDevice(): Device {
+	const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+	try {
+		const d = JSON.parse(localStorage.getItem(DEVICE_KEY) ?? 'null');
+		if (d && typeof d.id === 'string' && typeof d.name === 'string') return { id: d.id, name: d.name };
+	} catch {
+		/* storage blocked or corrupt */
+	}
+	const d = { id: crypto.randomUUID(), name: guessDeviceName(ua) };
+	try {
+		localStorage.setItem(DEVICE_KEY, JSON.stringify(d));
+	} catch {
+		/* storage blocked: the id lasts for this visit */
+	}
+	return d;
 }
 
 export type Found = Record<Tool, number> & { total: number };
@@ -106,11 +134,28 @@ class App {
 	roots = $state.raw<Root[]>([]);
 	/** roots remembered from an earlier visit that need a click to re-grant access */
 	pendingRoots = $state.raw<Root[]>([]);
-	sessions = $state.raw<Session[]>([]);
+	/** this computer's sessions, read from the picked folders */
+	ownSessions = $state.raw<Session[]>([]);
 	/** usage no session file holds any more, recovered from the agents' own running totals */
-	history = $state.raw<HistoryEntry[]>([]);
+	ownHistory = $state.raw<HistoryEntry[]>([]);
 	/** what the totals can't include, per tool */
-	notes = $state.raw<CoverageNote[]>([]);
+	ownNotes = $state.raw<CoverageNote[]>([]);
+
+	/** this computer's name and id, written into the device file it saves */
+	device = $state<Device>(loadDevice());
+	/** device files imported from this person's other computers */
+	devices = $state.raw<DeviceFile[]>([]);
+	#all = $derived(combine({ sessions: this.ownSessions, history: this.ownHistory, notes: this.ownNotes }, this.devices, this.device.id));
+	/** everything shown: this computer's sessions plus the imported devices' */
+	get sessions() {
+		return this.#all.sessions;
+	}
+	get history() {
+		return this.#all.history;
+	}
+	get notes() {
+		return this.#all.notes;
+	}
 	phase = $state<'idle' | 'scanning' | 'ready'>('idle');
 	progress = $state({ done: 0, total: 0, label: '' });
 	errors = $state<string[]>([]);
@@ -133,11 +178,12 @@ class App {
 		// Show the last sync right away; reading folders again needs access the browser may want re-granted.
 		const snap = await idb.get<{ sessions: Session[]; at: number } & Partial<Coverage>>('snapshot', 'last');
 		if (snap?.sessions?.length) {
-			this.sessions = snap.sessions;
-			this.history = snap.history ?? [];
-			this.notes = snap.notes ?? [];
+			this.ownSessions = snap.sessions;
+			this.ownHistory = snap.history ?? [];
+			this.ownNotes = snap.notes ?? [];
 			this.lastSync = snap.at;
 		}
+		this.devices = await idb.all<DeviceFile>('devices');
 		const saved = await idb.all<Root>('roots');
 		const granted: Root[] = [];
 		const pending: Root[] = [];
@@ -220,7 +266,7 @@ class App {
 
 		// Session paths start with the picked folder's name ("…/.claude/projects/x/y.jsonl" → ".claude").
 		const inRoot = (path: string | null | undefined) => (path ?? '').split('/')[0] === root.name;
-		const gone = this.sessions.filter((s) => inRoot(s.path));
+		const gone = this.ownSessions.filter((s) => inRoot(s.path));
 		const ids = new Set(gone.flatMap((s) => [s.id, ...s.subagents.map((x) => x.id)]));
 		for (const id of ids) await idb.del('messages', id);
 		try {
@@ -230,17 +276,17 @@ class App {
 			/* storage blocked or corrupt */
 		}
 		for (const k of await idb.keys('summaries')) if (typeof k === 'string' && inRoot(k.split('|')[2])) await idb.del('summaries', k);
-		this.sessions = this.sessions.filter((s) => !ids.has(s.id));
+		this.ownSessions = this.ownSessions.filter((s) => !ids.has(s.id));
 		for (const id of ids) this.#index.delete(id);
 
 		if (this.roots.length) await this.scan();
 		else {
 			// Nothing left to read: keep only sessions from folders still waiting for access.
-			const left = new Set(this.sessions.map((s) => s.source));
-			this.history = this.history.filter((h) => left.has(h.source));
-			this.notes = this.notes.filter((n) => left.has(n.source));
+			const left = new Set(this.ownSessions.map((s) => s.source));
+			this.ownHistory = this.ownHistory.filter((h) => left.has(h.source));
+			this.ownNotes = this.ownNotes.filter((n) => left.has(n.source));
 			await idb.set('snapshot', 'last', this.#snapshot(this.lastSync ?? Date.now()));
-			if (!this.sessions.length) {
+			if (!this.ownSessions.length) {
 				await idb.del('snapshot', 'last');
 				this.lastSync = null;
 				this.live = false;
@@ -248,8 +294,43 @@ class App {
 		}
 	}
 
+	renameDevice(name: string) {
+		this.device.name = name.trim().slice(0, 60) || guessDeviceName(navigator.userAgent);
+		try {
+			localStorage.setItem(DEVICE_KEY, JSON.stringify(this.device));
+		} catch {
+			/* storage blocked */
+		}
+	}
+
+	/** This computer's totals as a file to import on the person's other computers. Imported devices aren't included. */
+	deviceFile(): DeviceFile {
+		return buildDeviceFile(
+			$state.snapshot(this.device),
+			{ sessions: $state.snapshot(this.ownSessions) as Session[], history: $state.snapshot(this.ownHistory), notes: $state.snapshot(this.ownNotes) },
+			this.lastSync
+		);
+	}
+
+	/** Adds another computer's device file. A newer file from the same computer replaces the one already here. */
+	async importDevice(text: string): Promise<DeviceFile> {
+		const file = parseDeviceFile(text);
+		if (file.device.id === this.device.id) throw new Error('This file was saved on this computer, and its sessions are already counted here.');
+		const had = this.devices.find((d) => d.device.id === file.device.id);
+		if (had && had.exportedAt > file.exportedAt) throw new Error(`A newer file from ${had.device.name} is already here.`);
+		await idb.set('devices', file.device.id, file);
+		this.devices = [...this.devices.filter((d) => d.device.id !== file.device.id), file];
+		return file;
+	}
+
+	async removeDevice(id: string) {
+		await idb.del('devices', id);
+		this.devices = this.devices.filter((d) => d.device.id !== id);
+	}
+
 	async forgetEverything() {
-		for (const s of ['roots', 'summaries', 'snapshot', 'messages'] as const) await idb.clear(s);
+		this.devices = [];
+		for (const s of ['roots', 'summaries', 'snapshot', 'messages', 'devices'] as const) await idb.clear(s);
 		try {
 			localStorage.removeItem(LRU_KEY);
 		} catch {
@@ -257,9 +338,9 @@ class App {
 		}
 		this.roots = [];
 		this.pendingRoots = [];
-		this.sessions = [];
-		this.history = [];
-		this.notes = [];
+		this.ownSessions = [];
+		this.ownHistory = [];
+		this.ownNotes = [];
 		this.lastSync = null;
 		this.live = false;
 		this.#index.clear();
@@ -306,16 +387,16 @@ class App {
 				}
 			}
 			this.roots = [...this.roots]; // tools/lastSync changed on the objects
-			const previous = { sessions: this.sessions, history: this.history, notes: this.notes };
+			const previous = { sessions: this.ownSessions, history: this.ownHistory, notes: this.ownNotes };
 			await this.#build(entries);
 			// Folders still waiting for access: keep their sessions from the last sync rather than dropping them.
 			const waitingTools = new Set(this.pendingRoots.flatMap((r) => r.tools ?? []));
 			const waiting = (t: Tool) => waitingTools.has(t) && !liveTools.has(t);
 			const keep = previous.sessions.filter((s) => waiting(s.source) && !this.#index.has(s.id));
-			if (keep.length) this.sessions = [...this.sessions, ...keep];
+			if (keep.length) this.ownSessions = [...this.ownSessions, ...keep];
 			if (keep.length) {
-				this.history = [...this.history, ...previous.history.filter((h) => waiting(h.source))];
-				this.notes = [...this.notes, ...previous.notes.filter((n) => waiting(n.source))];
+				this.ownHistory = [...this.ownHistory, ...previous.history.filter((h) => waiting(h.source))];
+				this.ownNotes = [...this.ownNotes, ...previous.notes.filter((n) => waiting(n.source))];
 			}
 			this.lastSync = Date.now();
 			this.live = true;
@@ -326,7 +407,7 @@ class App {
 	}
 
 	#snapshot(at: number) {
-		return { sessions: $state.snapshot(this.sessions), history: $state.snapshot(this.history), notes: $state.snapshot(this.notes), at };
+		return { sessions: $state.snapshot(this.ownSessions), history: $state.snapshot(this.ownHistory), notes: $state.snapshot(this.ownNotes), at };
 	}
 
 	async #build(entries: Entry[]) {
@@ -423,10 +504,10 @@ class App {
 		}
 
 		this.#index = index;
-		this.sessions = [...index.values()].map((l) => l.session);
+		this.ownSessions = [...index.values()].map((l) => l.session);
 		const coverage = await this.#coverage(entries, units, summaries, claudeFiles);
-		this.history = coverage.history;
-		this.notes = coverage.notes;
+		this.ownHistory = coverage.history;
+		this.ownNotes = coverage.notes;
 	}
 
 	/** Usage the session files no longer hold, and what can't be counted at all. */
@@ -507,7 +588,7 @@ class App {
 	session(id: string): Session | undefined {
 		const l = this.#index.get(id);
 		if (l) return l.session;
-		const fromList = this.sessions.find((s) => s.id === id); // e.g. shown from the last sync
+		const fromList = this.sessions.find((s) => s.id === id); // e.g. shown from the last sync, or another computer's
 		if (fromList) return fromList;
 		for (const p of [...this.#index.values(), ...this.sessions.map((session) => ({ session, subs: new Map<string, Unit>() }))]) {
 			const sub = p.session.subagents.find((s) => s.id === id);
@@ -530,6 +611,8 @@ class App {
 
 	/** A conversation: read from the folders when this visit has access, else from the recent-conversations cache. */
 	async messages(id: string): Promise<Msg[]> {
+		const from = this.session(id)?.device;
+		if (from) throw new OtherDevice(from);
 		try {
 			const msgs = await this.#readMessages(id);
 			void this.#remember(id, msgs);
@@ -561,7 +644,7 @@ class App {
 
 	async #readMessages(id: string): Promise<Msg[]> {
 		if (id.startsWith('opencode:')) {
-			if (!this.live || !this.sessions.some((s) => s.id === id && this.#index.has(id))) throw new NeedsSync();
+			if (!this.live || !this.ownSessions.some((s) => s.id === id && this.#index.has(id))) throw new NeedsSync();
 			return this.pool.run<Msg[]>({ op: 'opencode-messages', sid: id.slice(9) }, this.#ocSlot);
 		}
 		if (/^(claude|cursor)-sub:/.test(id)) {

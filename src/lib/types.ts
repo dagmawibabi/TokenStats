@@ -65,6 +65,8 @@ export interface Session extends Summary {
 	parent: string | null;
 	subagents: SubagentRef[];
 	subagent_tokens: Tokens;
+	/** name of the computer this session was imported from (a device file); absent for this computer's own */
+	device?: string;
 }
 
 export type MsgKind = 'text' | 'thinking' | 'tool_call' | 'tool_result' | 'meta' | 'image';
